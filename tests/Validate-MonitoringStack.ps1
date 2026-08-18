@@ -632,6 +632,8 @@ foreach ($platformTerm in @(
   'probe_success{host="nginx"}',
   'probe_success{host="infisical"}',
   'probe_success{host="esus-pec-minio"}',
+  'probe_success{host="protocolos",vmid="104"}',
+  'probe_http_status_code{host="protocolos",vmid="104"}',
   'nginx_up{host="nginx"}',
   'minio_cluster_capacity_usable_free_bytes{host="esus-pec-minio"}',
   'minio_cluster_bucket_total{host="esus-pec-minio"}',
@@ -643,6 +645,14 @@ foreach ($platformTerm in @(
   if ($platformNormalizedExpressionSet -notmatch [regex]::Escape($normalizedPlatformTerm)) {
     throw "Missing platform services dashboard expression: $platformTerm"
   }
+}
+
+$protocolosPanel = @(
+  $platformDashboardObject.panels |
+    Where-Object { $_.title -eq "Saúde da API Protocolos" }
+)
+if ($protocolosPanel.Count -ne 1) {
+  throw "O dashboard deve conter um único painel chamado Saúde da API Protocolos."
 }
 
 foreach ($platformLogTerm in @(
@@ -855,6 +865,68 @@ foreach ($newTargetTerm in @(
 )) {
   if ($prometheusTemplate -notmatch [regex]::Escape($newTargetTerm)) {
     throw "Missing extra target Prometheus term: $newTargetTerm"
+  }
+}
+
+$blackboxTemplate = Get-Content -LiteralPath (Get-ArtifactPath "scripts/monitoring/templates/blackbox.yml") -Raw
+$protocolosModulePattern =
+  '(?ms)^\s{2}https_401_tls_validado:\s*$.*?(?=^\s{2}\S.*:\s*$|\z)'
+$protocolosModuleMatch = [regex]::Match($blackboxTemplate, $protocolosModulePattern)
+if (-not $protocolosModuleMatch.Success) {
+  throw "Falta o módulo Blackbox com validação TLS para a sonda de saúde da API Protocolos."
+}
+
+$protocolosModule = $protocolosModuleMatch.Value
+if ($protocolosModule -notmatch 'valid_status_codes:\s*\[\s*401\s*\]') {
+  throw "O módulo Blackbox da API Protocolos deve tratar o HTTP 401 como saudável."
+}
+
+if ($protocolosModule -notmatch 'fail_if_not_ssl:\s*true') {
+  throw "O módulo Blackbox da API Protocolos deve exigir TLS."
+}
+
+if ($protocolosModule -match 'insecure_skip_verify\s*:') {
+  throw "O módulo Blackbox da API Protocolos deve validar TLS sem desativar a verificação do certificado."
+}
+
+$protocolosProbeJobPattern =
+  '(?ms)^\s*-\s*job_name:\s*["'']?sonda-saude-api-protocolos["'']?\s*$.*?(?=^\s*-\s*job_name:|\z)'
+$protocolosProbeJobMatch = [regex]::Match($activePrometheusTemplate, $protocolosProbeJobPattern)
+if (-not $protocolosProbeJobMatch.Success) {
+  throw "Falta o job dedicado do Prometheus para a sonda de saúde da API Protocolos."
+}
+
+$protocolosProbeJob = $protocolosProbeJobMatch.Value
+foreach ($protocolosProbeTerm in @(
+  'module: [https_401_tls_validado]',
+  'https://protocolos.portosoftware.com.br/api/health',
+  'host: protocolos',
+  'vmid: "104"',
+  '127.0.0.1:9115'
+)) {
+  if ($protocolosProbeJob -notmatch [regex]::Escape($protocolosProbeTerm)) {
+    throw "Falta o termo da sonda Prometheus da API Protocolos: $protocolosProbeTerm"
+  }
+}
+
+$monitoringRunbook = $artifactByPath["docs/monitoring/2026-06-14-centralized-monitoring.md"].Content
+foreach ($protocolosDocumentationTerm in @(
+  'https://protocolos.portosoftware.com.br/api/health',
+  'HTTP 401',
+  'probe_success{host="protocolos",vmid="104"} == 1',
+  'probe_http_status_code{host="protocolos",vmid="104"} == 401',
+  'Provision-MonitoringCore.ps1 -SkipCreate',
+  'Publish-GrafanaDashboards.ps1',
+  'Rollback da sonda Protocolos',
+  'Saúde da API Protocolos',
+  '## Evidências e checklist de aceite da sonda Protocolos',
+  'Status: **PENDENTE ATÉ O ROLLOUT**',
+  'Nenhuma evidência de execução ao vivo foi coletada por esta alteração.',
+  'journalctl -u prometheus-blackbox-exporter',
+  'journalctl -u prometheus'
+)) {
+  if ($monitoringRunbook -notmatch [regex]::Escape($protocolosDocumentationTerm)) {
+    throw "Falta o termo da documentação operacional da API Protocolos: $protocolosDocumentationTerm"
   }
 }
 

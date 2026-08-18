@@ -18,6 +18,10 @@ target OS and systems are ready for monitored agent installation.
 The second platform rollout adds observability for CT `110 nginx`, CT
 `120 infisical`, and CT `134 esus-pec-minio`.
 
+A sonda da API Protocolos permanece apenas configurada até que uma publicação
+operacional revisada seja aprovada explicitamente. Esta alteração do
+repositório não publica no núcleo de monitoramento nem em produção.
+
 ## Topology
 
 ### Monitoring Core
@@ -68,6 +72,20 @@ The second platform rollout adds observability for CT `110 nginx`, CT
   - Coverage: node exporter, Alloy logs, Blackbox HTTPS health probe, native
     MinIO Prometheus metrics at `/minio/v2/metrics/cluster` with local TLS
     verification disabled in Prometheus for the self-signed endpoint.
+
+### API Protocolos
+
+- VMID: `104`
+- Rótulo do host: `protocolos`
+- Endpoint: `https://protocolos.portosoftware.com.br/api/health`
+- Sonda: Blackbox HTTP sobre HTTPS com validação de certificado habilitada.
+- Resultado esperado: o HTTP 401 é saudável para esta requisição de saúde sem
+  autenticação; portanto, `probe_success` deve ser `1` e
+  `probe_http_status_code` deve ser `401`.
+
+O módulo dedicado `https_401_tls_validado` não usa `insecure_skip_verify`.
+Falha de certificado, nome do host, cadeia ou negociação TLS deve fazer a sonda
+falhar, ainda que o endpoint retornasse `401` em outra condição.
 
 ## Agent Choice
 
@@ -224,6 +242,36 @@ Expected platform checks:
 - Blackbox probes report `probe_success == 1` for `nginx`, `infisical`, and
   `esus-pec-minio`.
 
+### Publicação e validação da sonda Protocolos
+
+Após revisão e aprovação operacional, publique a configuração do núcleo e o
+dashboard usando os comandos existentes. Não execute esta sequência como parte
+da alteração de artefatos ou sem a aprovação de mudança:
+
+```powershell
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Provision-MonitoringCore.ps1 -SkipCreate
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Publish-GrafanaDashboards.ps1
+```
+
+Antes da publicação, valide os artefatos estaticamente:
+
+```powershell
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File tests/Validate-MonitoringStack.ps1
+```
+
+Depois que a configuração do núcleo recarregar, consulte o Prometheus e o
+painel `Saúde da API Protocolos` no dashboard
+`Platform Services CT 110 120 134`. Os resultados esperados são:
+
+```text
+probe_success{host="protocolos",vmid="104"} == 1
+probe_http_status_code{host="protocolos",vmid="104"} == 401
+```
+
+O status `401` confirma que o endpoint exige autenticação sem converter a
+sonda em uma verificação autenticada. Não adicione credenciais, cabeçalhos de
+autorização ou `insecure_skip_verify` para alterar esse comportamento.
+
 Expected live checks:
 
 - PostgreSQL exporter: expected `up` on `192.168.1.209:9187`, `pg_up` present,
@@ -345,6 +393,25 @@ This rollback does not remove node exporter or Alloy from CT `110`, `120`, or
 `134`; remove those only after confirming no other dashboard or log pipeline
 depends on them.
 
+### Rollback da sonda Protocolos
+
+Para retirar apenas a sonda Protocolos, reverta o commit de monitoramento
+aprovado no branch de operação, execute a validação estática e reaplique os
+artefatos gerenciados no núcleo. O rollback não remove o Blackbox Exporter nem
+as demais sondas:
+
+```powershell
+rtk git revert <commit-monitoramento-protocolos>
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File tests/Validate-MonitoringStack.ps1
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Provision-MonitoringCore.ps1 -SkipCreate
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Publish-GrafanaDashboards.ps1
+```
+
+Confirme no Prometheus que não existem mais séries com
+`host="protocolos"` e `vmid="104"`. A publicação e o rollback em CT `190`
+continuam sujeitos a aprovação operacional; não os execute a partir deste
+worktree sem a janela aprovada.
+
 Review the JMX proposal before making or rolling back Java changes. The current
 agent install writes review material and does not apply a Java service change by
 default:
@@ -352,6 +419,35 @@ default:
 ```powershell
 rtk ssh <proxmox-ssh-target> "pct exec 133 -- bash -lc 'test -f /root/monitoring-jmx-proposal.txt && sed -n \"1,160p\" /root/monitoring-jmx-proposal.txt || true'"
 ```
+
+## Evidências e checklist de aceite da sonda Protocolos
+
+Status: **PENDENTE ATÉ O ROLLOUT**.
+
+Nenhuma evidência de execução ao vivo foi coletada por esta alteração. Durante
+a janela aprovada de rollout, colete somente saídas sanitizadas, sem tokens,
+credenciais, corpos de requisição nem dados sensíveis, e conclua este checklist:
+
+- [ ] Registrar o commit implantado, o horário UTC da publicação e o operador
+  responsável.
+- [ ] Anexar o trecho sanitizado de `journalctl -u prometheus` que demonstre o
+  recarregamento sem erro da configuração contendo
+  `sonda-saude-api-protocolos`.
+- [ ] Anexar o trecho sanitizado de
+  `journalctl -u prometheus-blackbox-exporter` correspondente à primeira sonda,
+  sem cabeçalhos ou conteúdo da resposta.
+- [ ] Registrar a consulta
+  `probe_success{host="protocolos",vmid="104"}` com resultado exato `1`.
+- [ ] Registrar a consulta
+  `probe_http_status_code{host="protocolos",vmid="104"}` com resultado exato
+  `401`; qualquer outro status reprova o aceite.
+- [ ] Registrar evidência de TLS válido para o nome público, cadeia e validade
+  do certificado. Uma execução com `insecure_skip_verify` não é aceita.
+- [ ] Registrar o painel `Saúde da API Protocolos` mostrando o sucesso da sonda
+  e o status HTTP `401`, sem expor dados sensíveis.
+- [ ] Exercitar o rollback revisado, comprovar a ausência das séries da sonda
+  após a retirada e registrar a reaplicação somente se ela fizer parte da mesma
+  janela aprovada.
 
 ## Validation Evidence
 
