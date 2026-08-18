@@ -105,10 +105,10 @@ scrape_configs:
       - target_label: __address__
         replacement: 127.0.0.1:9115
 
-  - job_name: protocolos-api-health-probe
+  - job_name: sonda-saude-api-protocolos
     metrics_path: /probe
     params:
-      module: [https_401_tls_validated]
+      module: [https_401_tls_validado]
     static_configs:
       - targets:
           - https://protocolos.portosoftware.com.br/api/health

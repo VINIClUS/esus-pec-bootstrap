@@ -10,7 +10,7 @@ modules:
       tls_config:
         insecure_skip_verify: true
 
-  https_401_tls_validated:
+  https_401_tls_validado:
     prober: http
     timeout: 5s
     http:

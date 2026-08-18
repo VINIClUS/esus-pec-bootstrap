@@ -647,6 +647,14 @@ foreach ($platformTerm in @(
   }
 }
 
+$protocolosPanel = @(
+  $platformDashboardObject.panels |
+    Where-Object { $_.title -eq "Saúde da API Protocolos" }
+)
+if ($protocolosPanel.Count -ne 1) {
+  throw "O dashboard deve conter um único painel chamado Saúde da API Protocolos."
+}
+
 foreach ($platformLogTerm in @(
   'host=~"nginx|infisical|esus-pec-minio"',
   'job=~"linux-target-journal|linux-target-syslog|linux-target-application-logs"'
@@ -862,38 +870,42 @@ foreach ($newTargetTerm in @(
 
 $blackboxTemplate = Get-Content -LiteralPath (Get-ArtifactPath "scripts/monitoring/templates/blackbox.yml") -Raw
 $protocolosModulePattern =
-  '(?ms)^\s{2}https_401_tls_validated:\s*$.*?(?=^\s{2}\S.*:\s*$|\z)'
+  '(?ms)^\s{2}https_401_tls_validado:\s*$.*?(?=^\s{2}\S.*:\s*$|\z)'
 $protocolosModuleMatch = [regex]::Match($blackboxTemplate, $protocolosModulePattern)
 if (-not $protocolosModuleMatch.Success) {
-  throw "Missing TLS-validating Blackbox module for the Protocolos API health probe."
+  throw "Falta o módulo Blackbox com validação TLS para a sonda de saúde da API Protocolos."
 }
 
 $protocolosModule = $protocolosModuleMatch.Value
 if ($protocolosModule -notmatch 'valid_status_codes:\s*\[\s*401\s*\]') {
-  throw "Protocolos API Blackbox module must treat HTTP 401 as healthy."
+  throw "O módulo Blackbox da API Protocolos deve tratar o HTTP 401 como saudável."
+}
+
+if ($protocolosModule -notmatch 'fail_if_not_ssl:\s*true') {
+  throw "O módulo Blackbox da API Protocolos deve exigir TLS."
 }
 
 if ($protocolosModule -match 'insecure_skip_verify\s*:') {
-  throw "Protocolos API Blackbox module must validate TLS and must not disable certificate verification."
+  throw "O módulo Blackbox da API Protocolos deve validar TLS sem desativar a verificação do certificado."
 }
 
 $protocolosProbeJobPattern =
-  '(?ms)^\s*-\s*job_name:\s*["'']?protocolos-api-health-probe["'']?\s*$.*?(?=^\s*-\s*job_name:|\z)'
+  '(?ms)^\s*-\s*job_name:\s*["'']?sonda-saude-api-protocolos["'']?\s*$.*?(?=^\s*-\s*job_name:|\z)'
 $protocolosProbeJobMatch = [regex]::Match($activePrometheusTemplate, $protocolosProbeJobPattern)
 if (-not $protocolosProbeJobMatch.Success) {
-  throw "Missing dedicated Prometheus Protocolos API health probe job."
+  throw "Falta o job dedicado do Prometheus para a sonda de saúde da API Protocolos."
 }
 
 $protocolosProbeJob = $protocolosProbeJobMatch.Value
 foreach ($protocolosProbeTerm in @(
-  'module: [https_401_tls_validated]',
+  'module: [https_401_tls_validado]',
   'https://protocolos.portosoftware.com.br/api/health',
   'host: protocolos',
   'vmid: "104"',
   '127.0.0.1:9115'
 )) {
   if ($protocolosProbeJob -notmatch [regex]::Escape($protocolosProbeTerm)) {
-    throw "Missing Protocolos API Prometheus probe term: $protocolosProbeTerm"
+    throw "Falta o termo da sonda Prometheus da API Protocolos: $protocolosProbeTerm"
   }
 }
 
@@ -905,10 +917,16 @@ foreach ($protocolosDocumentationTerm in @(
   'probe_http_status_code{host="protocolos",vmid="104"} == 401',
   'Provision-MonitoringCore.ps1 -SkipCreate',
   'Publish-GrafanaDashboards.ps1',
-  'Rollback da sonda Protocolos'
+  'Rollback da sonda Protocolos',
+  'Saúde da API Protocolos',
+  '## Evidências e checklist de aceite da sonda Protocolos',
+  'Status: **PENDENTE ATÉ O ROLLOUT**',
+  'Nenhuma evidência de execução ao vivo foi coletada por esta alteração.',
+  'journalctl -u prometheus-blackbox-exporter',
+  'journalctl -u prometheus'
 )) {
   if ($monitoringRunbook -notmatch [regex]::Escape($protocolosDocumentationTerm)) {
-    throw "Missing Protocolos API operational documentation term: $protocolosDocumentationTerm"
+    throw "Falta o termo da documentação operacional da API Protocolos: $protocolosDocumentationTerm"
   }
 }
 
