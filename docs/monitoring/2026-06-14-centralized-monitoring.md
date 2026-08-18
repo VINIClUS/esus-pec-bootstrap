@@ -18,6 +18,10 @@ target OS and systems are ready for monitored agent installation.
 The second platform rollout adds observability for CT `110 nginx`, CT
 `120 infisical`, and CT `134 esus-pec-minio`.
 
+The Protocolos API probe is configuration-only until a reviewed operational
+publication is explicitly approved. This repository change does not publish to
+the monitoring core or production.
+
 ## Topology
 
 ### Monitoring Core
@@ -68,6 +72,21 @@ The second platform rollout adds observability for CT `110 nginx`, CT
   - Coverage: node exporter, Alloy logs, Blackbox HTTPS health probe, native
     MinIO Prometheus metrics at `/minio/v2/metrics/cluster` with local TLS
     verification disabled in Prometheus for the self-signed endpoint.
+
+### Protocolos API
+
+- VMID: `104`
+- Host label: `protocolos`
+- Endpoint: `https://protocolos.portosoftware.com.br/api/health`
+- Probe: Blackbox HTTP over HTTPS with certificate validation enabled.
+- Expected result: HTTP 401 is healthy for this unauthenticated health
+  request; `probe_success` must therefore be `1` and
+  `probe_http_status_code` must be `401`.
+
+The dedicated `https_401_tls_validated` module does not use
+`insecure_skip_verify`. A certificate, hostname, chain, or TLS handshake
+failure must make the probe fail even when the endpoint would otherwise return
+`401`.
 
 ## Agent Choice
 
@@ -224,6 +243,36 @@ Expected platform checks:
 - Blackbox probes report `probe_success == 1` for `nginx`, `infisical`, and
   `esus-pec-minio`.
 
+### Publicacao e validacao da sonda Protocolos
+
+Após revisao e aprovacao operacional, publique a configuracao do core e o
+dashboard usando os comandos existentes. Nao execute esta sequencia como parte
+da alteracao de artefatos ou sem a aprovacao de mudanca:
+
+```powershell
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Provision-MonitoringCore.ps1 -SkipCreate
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Publish-GrafanaDashboards.ps1
+```
+
+Antes da publicacao, valide os artefatos estaticamente:
+
+```powershell
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File tests/Validate-MonitoringStack.ps1
+```
+
+Depois de a configuracao do core recarregar, consulte Prometheus e o painel
+`Protocolos API Health` no dashboard `Platform Services CT 110 120 134`. Os
+resultados esperados sao:
+
+```text
+probe_success{host="protocolos",vmid="104"} == 1
+probe_http_status_code{host="protocolos",vmid="104"} == 401
+```
+
+O status `401` confirma que o endpoint exige autenticacao sem converter a
+sonda em uma verificacao autenticada. Nao adicione credenciais, cabecalhos de
+autorizacao ou `insecure_skip_verify` para alterar esse comportamento.
+
 Expected live checks:
 
 - PostgreSQL exporter: expected `up` on `192.168.1.209:9187`, `pg_up` present,
@@ -344,6 +393,25 @@ rtk ssh <proxmox-ssh-target> "pct exec 190 -- bash -lc 'systemctl disable --now 
 This rollback does not remove node exporter or Alloy from CT `110`, `120`, or
 `134`; remove those only after confirming no other dashboard or log pipeline
 depends on them.
+
+### Rollback da sonda Protocolos
+
+Para retirar apenas a sonda Protocolos, reverta o commit de monitoramento
+aprovado no branch de operacao, execute a validacao estatica e reaplique os
+artefatos gerenciados no core. O rollback nao remove o Blackbox Exporter nem
+as demais sondas:
+
+```powershell
+rtk git revert <commit-monitoramento-protocolos>
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File tests/Validate-MonitoringStack.ps1
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Provision-MonitoringCore.ps1 -SkipCreate
+rtk powershell -NoProfile -ExecutionPolicy Bypass -File scripts/monitoring/Publish-GrafanaDashboards.ps1
+```
+
+Confirme no Prometheus que nao existem mais series com
+`host="protocolos"` e `vmid="104"`. A publicacao e o rollback em CT `190`
+continuam sujeitos a aprovacao operacional; nao os execute a partir deste
+worktree sem a janela aprovada.
 
 Review the JMX proposal before making or rolling back Java changes. The current
 agent install writes review material and does not apply a Java service change by

@@ -632,6 +632,8 @@ foreach ($platformTerm in @(
   'probe_success{host="nginx"}',
   'probe_success{host="infisical"}',
   'probe_success{host="esus-pec-minio"}',
+  'probe_success{host="protocolos",vmid="104"}',
+  'probe_http_status_code{host="protocolos",vmid="104"}',
   'nginx_up{host="nginx"}',
   'minio_cluster_capacity_usable_free_bytes{host="esus-pec-minio"}',
   'minio_cluster_bucket_total{host="esus-pec-minio"}',
@@ -855,6 +857,58 @@ foreach ($newTargetTerm in @(
 )) {
   if ($prometheusTemplate -notmatch [regex]::Escape($newTargetTerm)) {
     throw "Missing extra target Prometheus term: $newTargetTerm"
+  }
+}
+
+$blackboxTemplate = Get-Content -LiteralPath (Get-ArtifactPath "scripts/monitoring/templates/blackbox.yml") -Raw
+$protocolosModulePattern =
+  '(?ms)^\s{2}https_401_tls_validated:\s*$.*?(?=^\s{2}\S.*:\s*$|\z)'
+$protocolosModuleMatch = [regex]::Match($blackboxTemplate, $protocolosModulePattern)
+if (-not $protocolosModuleMatch.Success) {
+  throw "Missing TLS-validating Blackbox module for the Protocolos API health probe."
+}
+
+$protocolosModule = $protocolosModuleMatch.Value
+if ($protocolosModule -notmatch 'valid_status_codes:\s*\[\s*401\s*\]') {
+  throw "Protocolos API Blackbox module must treat HTTP 401 as healthy."
+}
+
+if ($protocolosModule -match 'insecure_skip_verify\s*:') {
+  throw "Protocolos API Blackbox module must validate TLS and must not disable certificate verification."
+}
+
+$protocolosProbeJobPattern =
+  '(?ms)^\s*-\s*job_name:\s*["'']?protocolos-api-health-probe["'']?\s*$.*?(?=^\s*-\s*job_name:|\z)'
+$protocolosProbeJobMatch = [regex]::Match($activePrometheusTemplate, $protocolosProbeJobPattern)
+if (-not $protocolosProbeJobMatch.Success) {
+  throw "Missing dedicated Prometheus Protocolos API health probe job."
+}
+
+$protocolosProbeJob = $protocolosProbeJobMatch.Value
+foreach ($protocolosProbeTerm in @(
+  'module: [https_401_tls_validated]',
+  'https://protocolos.portosoftware.com.br/api/health',
+  'host: protocolos',
+  'vmid: "104"',
+  '127.0.0.1:9115'
+)) {
+  if ($protocolosProbeJob -notmatch [regex]::Escape($protocolosProbeTerm)) {
+    throw "Missing Protocolos API Prometheus probe term: $protocolosProbeTerm"
+  }
+}
+
+$monitoringRunbook = $artifactByPath["docs/monitoring/2026-06-14-centralized-monitoring.md"].Content
+foreach ($protocolosDocumentationTerm in @(
+  'https://protocolos.portosoftware.com.br/api/health',
+  'HTTP 401',
+  'probe_success{host="protocolos",vmid="104"} == 1',
+  'probe_http_status_code{host="protocolos",vmid="104"} == 401',
+  'Provision-MonitoringCore.ps1 -SkipCreate',
+  'Publish-GrafanaDashboards.ps1',
+  'Rollback da sonda Protocolos'
+)) {
+  if ($monitoringRunbook -notmatch [regex]::Escape($protocolosDocumentationTerm)) {
+    throw "Missing Protocolos API operational documentation term: $protocolosDocumentationTerm"
   }
 }
 
